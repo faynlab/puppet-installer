@@ -1,0 +1,75 @@
+#!/bin/bash
+
+set -eo pipefail
+
+#******* Global Variables *******
+version="1.0.0"
+script_name=$(basename "$0")
+red="\033[0;31m"
+green="\033[0;32m"
+yellow="\033[1;32m"
+nc="\033[0m"
+tmp_path="/tmp"
+
+# ******* Start Function *******
+error_msg() {
+    echo -e "\n${red}ERROR: $1${nc}"
+    exit 1
+}
+info_msg() {
+    echo -e "\n${green}INFO: $1${nc}"
+}
+cmd_exists () {
+    for cmd in "$@"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            error_msg "$cmd command does not exist."
+        fi
+    done
+}
+ubuntu_install_puppet () {
+    distro=$(lsb_release -is)
+    codename=$(lsb_release -cs)
+    if [[ "$distro" == "Ubuntu" ]]; then
+        apt-get update && apt-get upgrade -y
+        # Check if commands exist
+        cmd_exists curl dpkg
+
+        #******* Check if puppet_version is set *******
+        if [[ -z "${puppet_version}" ]]; then
+            error_msg "puppet_version is not defined. Use 'puppet_version=<version>' or set it in the environment."
+        fi
+
+        #******* Ubuntu Variables *******
+        apt_url="https://apt.puppetlabs.com"
+        puppet_package="puppet${puppet_version}-release-${codename}.deb"
+        rocket_version="4.1.0"
+
+        echo ""
+
+        # Prompt user for confirmation
+        read -p "Do you want to proceed with 'puppet installation' on $HOSTNAME node? (yes/no): " answer
+        answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')  # Convert to lowercase
+
+        if [[ "$answer" == "yes" || "$answer" == "y" ]]; then
+            info_msg "Installing ${puppet_package} on ${distro}-${codename}"
+
+            # Download and install the Puppet package
+            curl -o $tmp_path/$puppet_package $apt_url/$puppet_package
+            dpkg -i $tmp_path/$puppet_package
+            apt-get update && apt-get install puppet-agent -y
+
+            apt update && apt install -y ruby-full
+
+            # Install r10k gem
+            cmd_exists gem
+            gem install r10k -v $rocket_version
+
+            info_msg "Successfully installed Puppet ${puppet_version} on ${distro}-${codename}"
+        else
+            echo "Aborted. Not proceeding with 'puppet installation'."
+        fi
+    fi
+}
+
+#******* Script start *******
+ubuntu_install_puppet
