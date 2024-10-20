@@ -1,0 +1,115 @@
+#!/bin/bash
+
+set -eo pipefail
+
+#******* Global Variables *******
+version="1.0.0"
+script_name=$(basename "$0")
+red="\033[0;31m"
+green="\033[0;32m"
+yellow="\033[1;32m"
+nc="\033[0m"
+tmp_path="/tmp"
+puppet_dir="/opt/puppetlabs"
+puppet_bin_dir="${puppet_dir}/bin"
+
+# ******* Start Function *******
+error_msg() {
+    echo -e "\n${red}ERROR: $1${nc}"
+    exit 1
+}
+info_msg() {
+    echo -e "\n${green}INFO: $1${nc}"
+}
+cmd_exists () {
+    for cmd in "$@"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            error_msg "$cmd command does not exist."
+        fi
+    done
+}
+
+require_root_access() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "ERROR: This script requires root access"
+    exit 1
+  fi
+}
+
+ubuntu_install_puppet () {
+    info_msg "Installing Puppet agent version: ${puppet_version}"
+    distro=$(lsb_release -is)
+    codename=$(lsb_release -cs)
+    if [[ "$distro" == "Ubuntu" ]]; then
+        apt-get -qq update && apt-get -qq upgrade -y
+        # Check if commands exist
+        cmd_exists curl dpkg
+
+        #******* Check if puppet_version is set *******
+        if [[ -z "${puppet_version}" ]]; then
+            error_msg "puppet_version is not defined. Use 'puppet_version=<version>' or set it in the environment."
+        fi
+
+        #******* Ubuntu Variables *******
+        puppet_apt_repo="apt.puppet.com"
+        puppet_package="puppet${puppet_version}-release-${codename}.deb"
+
+        echo ""
+
+        # Prompt user for confirmation
+        read -p "Do you want to proceed with 'puppet installation' on $HOSTNAME node? (yes/no): " answer
+        answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')  # Convert to lowercase
+
+        if [[ "$answer" == "yes" || "$answer" == "y" ]]; then
+            info_msg "Installing ${puppet_package} on ${distro}-${codename}"
+
+            # Download and install the Puppet package
+            curl -o $tmp_path/$puppet_package $puppet_apt_repo/$puppet_package
+            dpkg -i $tmp_path/$puppet_package
+            apt-get -qq update && apt-get -qq install -y puppet-agent
+
+            info_msg "Successfully installed Puppet ${puppet_version} on ${distro}-${codename}"
+        else
+            echo "Aborted. Not proceeding with 'puppet installation'."
+        fi
+    fi
+}
+
+configure_puppet() {
+    echo ""
+    info_msg "Connecting to Master server: ${puppet_cfg_server}"
+    cmd_exists ${puppet_bin_dir}/puppet
+
+    #******* Check if puppet env is set *******
+    required_vars=("puppet_cfg_certname" "puppet_cfg_env" "puppet_cfg_server")
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var}" ]]; then
+            error_msg "$var is not defined. Use '$var=<value>' or set it in the environment."
+        fi
+    done
+
+    ${puppet_bin_dir}/puppet config set runinterval "${puppet_cfg_runinterval:-30m}" --section agent
+    ${puppet_bin_dir}/puppet config set environment "${puppet_cfg_env:-development}" --section agent
+    [ -n "$puppet_cfg_certname" ] && ${puppet_bin_dir}/puppet config set certname "${puppet_cfg_certname}" --section agent
+    ${puppet_bin_dir}/puppet config set masterport "${puppet_cfg_masterport:-443}" --section main
+    ${puppet_bin_dir}/puppet config set server "$puppet_cfg_server" --section main
+    ${puppet_bin_dir}/puppet resource service puppet ensure=running enable=true
+}
+
+test_puppet() {
+  ${puppet_bin_dir}/puppet agent -t --noop --summarize --waitforcert 15 --environment "${puppet_cfg_env:-development}"
+}
+
+
+#******* Script start *******
+require_root_access
+
+    if command -v "${puppet_bin_dir}/puppet" >/dev/null 2>&1; then
+        echo "Puppet already installed."
+        exit 0
+    else
+        # Setup puppet binary
+        ubuntu_install_puppet
+        # Configure puppet
+        configure_puppet
+    fi
